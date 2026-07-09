@@ -1,6 +1,7 @@
 import base64
 import io
 import time
+import os  # <-- Yeh zaroori hai Render variables read karne ke liye
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -23,7 +24,6 @@ class QARequest(BaseModel):
 
 @app.post("/answer-image")
 async def answer_image(payload: QARequest):
-    # Retry mechanism for temporary 503 high demand spikes
     max_retries = 3
     delay = 2
     
@@ -38,7 +38,10 @@ async def answer_image(payload: QARequest):
             image_bytes = base64.b64decode(img_str)
             image = Image.open(io.BytesIO(image_bytes))
             
-            client = genai.Client(api_key="AIzaSyB5VcJSa-cHLLWv2cwcqj_GJGjYUARFx5o")
+            # --- API Key securely fetched from Render Environment ---
+            api_key = os.environ.get("GEMINI_API_KEY")
+            client = genai.Client(api_key=api_key)
+            # --------------------------------------------------------
             
             prompt = (
                 f"Question: {payload.question}\n\n"
@@ -59,7 +62,7 @@ async def answer_image(payload: QARequest):
             print(f"[ATTEMPT {attempt + 1} FAILED]: Retrying due to network/demand load...")
             if attempt < max_retries - 1:
                 time.sleep(delay)
-                delay *= 2  # Exponential backoff
+                delay *= 2  
             else:
                 import traceback
                 print(f"\n[FINAL SERVER EXCEPTION]:\n{traceback.format_exc()}")
@@ -67,4 +70,5 @@ async def answer_image(payload: QARequest):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run(app, host="0.0.0.0", port=port)
