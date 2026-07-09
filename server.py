@@ -41,7 +41,7 @@ class InvoiceResponse(BaseModel):
 # ==================== TASK 1 ENDPOINT ====================
 @app.post("/answer-image")
 async def answer_image(payload: QARequest):
-    max_retries = 6  # Rate limit se bachne ke liye retries badhaye
+    max_retries = 5
     delay = 1
     
     for attempt in range(max_retries):
@@ -55,8 +55,9 @@ async def answer_image(payload: QARequest):
             image_bytes = base64.b64decode(img_str)
             image = Image.open(io.BytesIO(image_bytes))
             
-            # SDK automatically environment se GEMINI_API_KEY utha leta hai
-            client = genai.Client()
+            # API Key explicitly pass kar rahe hain variable se
+            api_key = os.environ.get("GEMINI_API_KEY")
+            client = genai.Client(api_key=api_key)
             
             prompt = (
                 f"Question: {payload.question}\n\n"
@@ -75,19 +76,20 @@ async def answer_image(payload: QARequest):
             print(f"[IMAGE-QA ATTEMPT {attempt + 1} FAILED]: {str(e)}")
             if attempt < max_retries - 1:
                 time.sleep(delay)
-                delay *= 2  # Exponential backoff (1s, 2s, 4s, 8s, 16s)
+                delay *= 2  
             else:
-                raise HTTPException(status_code=500, detail=f"Image QA failed after retries: {str(e)}")
+                raise HTTPException(status_code=500, detail=f"Image QA error: {str(e)}")
 
 # ==================== TASK 2 ENDPOINT ====================
 @app.post("/extract")
 async def extract_invoice(payload: InvoiceRequest):
-    max_retries = 6  
+    max_retries = 5
     delay = 1
     
     for attempt in range(max_retries):
         try:
-            client = genai.Client()
+            api_key = os.environ.get("GEMINI_API_KEY")
+            client = genai.Client(api_key=api_key)
             
             response = client.models.generate_content(
                 model='gemini-2.5-flash',
@@ -118,7 +120,7 @@ async def extract_invoice(payload: InvoiceRequest):
                 time.sleep(delay)
                 delay *= 2  
             else:
-                raise HTTPException(status_code=500, detail=f"Extraction failed after retries: {str(e)}")
+                raise HTTPException(status_code=500, detail=f"Extraction error: {str(e)}")
 
 if __name__ == "__main__":
     import uvicorn
