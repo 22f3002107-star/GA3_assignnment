@@ -6,8 +6,9 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from google import genai
-from google.genai import types  # Structured output ke liye zaroori hai
+from google.genai import types  
 from PIL import Image
+from typing import Optional
 
 app = FastAPI()
 
@@ -28,13 +29,15 @@ class QARequest(BaseModel):
 class InvoiceRequest(BaseModel):
     invoice_text: str
 
+# Sabhi fields ko Optional banaya taaki missing hone par 'null' return ho sake (Rule 1)
 class InvoiceResponse(BaseModel):
-    invoice_no: str
-    date: str  # Format: YYYY-MM-DD
-    vendor: str
-    amount: float
-    tax: float
-    total: float
+    invoice_no: Optional[str] = None
+    date: Optional[str] = None  # Format: YYYY-MM-DD
+    vendor: Optional[str] = None
+    amount: Optional[float] = None
+    tax: Optional[float] = None
+    total: Optional[float] = None
+    currency: Optional[str] = None  # <-- Fixed: Added missing currency key
 
 # ==================== TASK 1 ENDPOINT ====================
 @app.post("/answer-image")
@@ -81,7 +84,6 @@ async def extract_invoice(payload: InvoiceRequest):
         api_key = os.environ.get("GEMINI_API_KEY")
         client = genai.Client(api_key=api_key)
         
-        # Gemini ko instruction de rahe hain strict schema follow karne ke liye
         response = client.models.generate_content(
             model='gemini-2.5-flash',
             contents=payload.invoice_text,
@@ -91,12 +93,12 @@ async def extract_invoice(payload: InvoiceRequest):
                 system_instruction=(
                     "Extract invoice data into the structured JSON format precisely.\n"
                     "Crucial Date Rule: Convert any human-readable dates (like '15 March 2026') strictly into ISO format 'YYYY-MM-DD'.\n"
-                    "Crucial Numeric Rule: Extract numbers as raw floats without commas, currency strings, or extra text symbols."
+                    "Crucial Numeric Rule: Extract numbers as raw floats without commas, currency strings, or extra text symbols.\n"
+                    "Crucial Currency Rule: Extract the currency code or symbol (e.g., 'USD', 'INR', 'Rs.', '$') into the currency field. If not found, leave it null."
                 )
             ),
         )
         
-        # Safe response return
         import json
         extracted_data = json.loads(response.text.strip())
         return extracted_data
