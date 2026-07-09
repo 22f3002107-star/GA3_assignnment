@@ -32,7 +32,7 @@ class InvoiceRequest(BaseModel):
 
 class InvoiceResponse(BaseModel):
     invoice_no: Optional[str] = None
-    date: Optional[str] = None  # Format: YYYY-MM-DD
+    date: Optional[str] = None  
     vendor: Optional[str] = None
     amount: Optional[float] = None
     tax: Optional[float] = None
@@ -41,8 +41,9 @@ class InvoiceResponse(BaseModel):
 # ==================== TASK 1 ENDPOINT ====================
 @app.post("/answer-image")
 async def answer_image(payload: QARequest):
-    max_retries = 3
-    delay = 2
+    max_retries = 6  # Rate limit se bachne ke liye retries badhaye
+    delay = 1
+    
     for attempt in range(max_retries):
         try:
             img_str = payload.image_base64
@@ -54,8 +55,8 @@ async def answer_image(payload: QARequest):
             image_bytes = base64.b64decode(img_str)
             image = Image.open(io.BytesIO(image_bytes))
             
-            api_key = os.environ.get("GEMINI_API_KEY")
-            client = genai.Client(api_key=api_key)
+            # SDK automatically environment se GEMINI_API_KEY utha leta hai
+            client = genai.Client()
             
             prompt = (
                 f"Question: {payload.question}\n\n"
@@ -69,23 +70,24 @@ async def answer_image(payload: QARequest):
             )
             answer_text = response.text.strip()
             return {"answer": answer_text}
+            
         except Exception as e:
+            print(f"[IMAGE-QA ATTEMPT {attempt + 1} FAILED]: {str(e)}")
             if attempt < max_retries - 1:
                 time.sleep(delay)
-                delay *= 2
+                delay *= 2  # Exponential backoff (1s, 2s, 4s, 8s, 16s)
             else:
-                raise HTTPException(status_code=500, detail=str(e))
+                raise HTTPException(status_code=500, detail=f"Image QA failed after retries: {str(e)}")
 
-# ==================== TASK 2 ENDPOINT (WITH RETRY LOGIC) ====================
+# ==================== TASK 2 ENDPOINT ====================
 @app.post("/extract")
 async def extract_invoice(payload: InvoiceRequest):
-    max_retries = 3
-    delay = 2
+    max_retries = 6  
+    delay = 1
     
     for attempt in range(max_retries):
         try:
-            api_key = os.environ.get("GEMINI_API_KEY")
-            client = genai.Client(api_key=api_key)
+            client = genai.Client()
             
             response = client.models.generate_content(
                 model='gemini-2.5-flash',
@@ -111,12 +113,12 @@ async def extract_invoice(payload: InvoiceRequest):
             return extracted_data
 
         except Exception as e:
-            print(f"[EXTRACT ATTEMPT {attempt + 1} FAILED]: Retrying due to high demand...")
+            print(f"[EXTRACT ATTEMPT {attempt + 1} FAILED]: {str(e)}")
             if attempt < max_retries - 1:
                 time.sleep(delay)
-                delay *= 2  # Exponential backoff
+                delay *= 2  
             else:
-                raise HTTPException(status_code=500, detail=f"Extraction Error after retries: {str(e)}")
+                raise HTTPException(status_code=500, detail=f"Extraction failed after retries: {str(e)}")
 
 if __name__ == "__main__":
     import uvicorn
