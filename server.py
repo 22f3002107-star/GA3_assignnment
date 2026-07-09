@@ -3,7 +3,7 @@ import io
 import time
 import os
 import json
-import random
+import asyncio  # Strict linear processing ke liye zaroori hai
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -22,16 +22,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# IITM Grader automatic evaluation suite ke liye full hard-mapped logic array
-STATIC_ANSWERS = {
-    "total": "2594.82",
-    "amount": "2199.00",
-    "tax": "395.82",
-    "quantity": "5",
-    "sum": "2594.82",
-    "price": "2199.00",
-    "invoice": "INV-2026-0041"
-}
+# Strict Google API Rate Limit Block Layer (Ensures 1 request at a time)
+RATE_LIMIT_LOCK = asyncio.Lock()
 
 class QARequest(BaseModel):
     image_base64: str
@@ -51,108 +43,97 @@ class InvoiceResponse(BaseModel):
 # ==================== TASK 1 ENDPOINT ====================
 @app.post("/answer-image")
 async def answer_image(payload: QARequest):
-    q_text = payload.question.strip().lower()
-    max_retries = 3
-    delay = 1
-    
-    for attempt in range(max_retries):
-        try:
-            if attempt > 0:
-                time.sleep(delay)
+    # Lock acquire karke queue system active hoga
+    async with RATE_LIMIT_LOCK:
+        max_retries = 4
+        delay = 2
+        
+        for attempt in range(max_retries):
+            try:
+                img_str = payload.image_base64
+                if "," in img_str:
+                    img_str = img_str.split(",")[-1]
+                missing_padding = len(img_str) % 4
+                if missing_padding:
+                    img_str += '=' * (4 - missing_padding)
+                image_bytes = base64.b64decode(img_str)
+                image = Image.open(io.BytesIO(image_bytes))
                 
-            img_str = payload.image_base64
-            if "," in img_str:
-                img_str = img_str.split(",")[-1]
-            missing_padding = len(img_str) % 4
-            if missing_padding:
-                img_str += '=' * (4 - missing_padding)
-            image_bytes = base64.b64decode(img_str)
-            image = Image.open(io.BytesIO(image_bytes))
-            
-            api_key = os.environ.get("GEMINI_API_KEY")
-            client = genai.Client(api_key=api_key)
-            
-            prompt = (
-                f"Question: {payload.question}\n\n"
-                "Task: Answer the question directly based on the image.\n"
-                "Strict Rule for numbers: If the answer is a numeric value, output ONLY the raw number digits (e.g., 4089.35). Do not include any words, commas, letters, currency symbols, or units."
-            )
-            
-            response = client.models.generate_content(
-                model='gemini-2.5-flash',
-                contents=[prompt, image]
-            )
-            answer_text = response.text.strip()
-            
-            if answer_text:
-                return {"answer": answer_text}
-            raise Exception("Empty string content")
-            
-        except Exception as e:
-            print(f"[IMAGE-QA RETRY {attempt + 1} LOGIC]: {str(e)}")
-            if attempt < max_retries - 1:
-                delay *= 2
-            else:
-                # --- BULLETPROOF PROTECTION LAYER ---
-                # Agar rate limit 429 block ho jaye, toh keyword match karke static dynamic array answer do
-                print(f"[CRITICAL SAFETY TRIGGERED] Custom fallback lookup for question: {payload.question}")
-                for key, val in STATIC_ANSWERS.items():
-                    if key in q_text:
-                        return {"answer": val}
-                # Super fallback standard string baseline value
-                return {"answer": "4089.35"}
+                api_key = os.environ.get("GEMINI_API_KEY")
+                client = genai.Client(api_key=api_key)
+                
+                prompt = (
+                    f"Question: {payload.question}\n\n"
+                    "Task: Answer the question directly based on the image.\n"
+                    "Strict Rule for numbers: If the answer is a numeric value, output ONLY the raw number digits (e.g., 4089.35). Do not include any words, commas, letters, currency symbols, or units."
+                )
+                
+                response = client.models.generate_content(
+                    model='gemini-2.5-flash',
+                    contents=[prompt, image]
+                )
+                answer_text = response.text.strip()
+                
+                # Agli incoming request ko hold karne ke liye mandatory cool down break
+                await asyncio.sleep(4.5)
+                
+                if answer_text:
+                    return {"answer": answer_text}
+                raise Exception("Empty output text string")
+                
+            except Exception as e:
+                print(f"[IMAGE-QA QUEUE RETRY {attempt + 1}]: {str(e)}")
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(delay)
+                    delay *= 2
+                else:
+                    raise HTTPException(status_code=500, detail=f"Image QA critical exception: {str(e)}")
 
 # ==================== TASK 2 ENDPOINT ====================
 @app.post("/extract")
 async def extract_invoice(payload: InvoiceRequest):
-    max_retries = 3
-    delay = 1
-    
-    for attempt in range(max_retries):
-        try:
-            if attempt > 0:
-                time.sleep(delay)
+    async with RATE_LIMIT_LOCK:
+        max_retries = 4
+        delay = 2
+        
+        for attempt in range(max_retries):
+            try:
+                api_key = os.environ.get("GEMINI_API_KEY")
+                client = genai.Client(api_key=api_key)
                 
-            api_key = os.environ.get("GEMINI_API_KEY")
-            client = genai.Client(api_key=api_key)
-            
-            response = client.models.generate_content(
-                model='gemini-2.5-flash',
-                contents=payload.invoice_text,
-                config=types.GenerateContentConfig(
-                    response_mime_type="application/json",
-                    response_schema=InvoiceResponse,
-                    system_instruction=(
-                        "Extract invoice data into the structured JSON format precisely.\n"
-                        "Crucial Date Rule: Convert any human-readable dates (like '15 March 2026') strictly into ISO format 'YYYY-MM-DD'.\n"
-                        "Crucial Numeric Rule: Extract numbers as raw floats without commas, currency strings, or extra text symbols.\n"
-                        "Crucial Currency Rule: Extract the currency field strictly as a standard 3-letter international ISO currency code.\n"
-                        "Convert symbols or local abbreviations into 3 letters. For example:\n"
-                        "- 'Rs.', '₹', 'INR', 'Rupees' MUST be extracted exactly as 'INR'\n"
-                        "- '$', 'USD', 'Dollars' MUST be extracted exactly as 'USD'\n"
-                        "- '£', 'GBP' MUST be extracted exactly as 'GBP'\n"
-                        "If currency cannot be identified, leave it null."
-                    )
-                ),
-            )
-            
-            extracted_data = json.loads(response.text.strip())
-            return extracted_data
+                response = client.models.generate_content(
+                    model='gemini-2.5-flash',
+                    contents=payload.invoice_text,
+                    config=types.GenerateContentConfig(
+                        response_mime_type="application/json",
+                        response_schema=InvoiceResponse,
+                        system_instruction=(
+                            "Extract invoice data into the structured JSON format precisely.\n"
+                            "Crucial Date Rule: Convert any human-readable dates (like '15 March 2026') strictly into ISO format 'YYYY-MM-DD'.\n"
+                            "Crucial Numeric Rule: Extract numbers as raw floats without commas, currency strings, or extra text symbols.\n"
+                            "Crucial Currency Rule: Extract the currency field strictly as a standard 3-letter international ISO currency code.\n"
+                            "Convert symbols or local abbreviations into 3 letters. For example:\n"
+                            "- 'Rs.', '₹', 'INR', 'Rupees' MUST be extracted exactly as 'INR'\n"
+                            "- '$', 'USD', 'Dollars' MUST be extracted exactly as 'USD'\n"
+                            "- '£', 'GBP' MUST be extracted exactly as 'GBP'\n"
+                            "If currency cannot be identified, leave it null."
+                        )
+                    ),
+                )
+                
+                extracted_data = json.loads(response.text.strip())
+                
+                # Agli incoming request ko hold karne ke liye mandatory cool down break
+                await asyncio.sleep(4.5)
+                return extracted_data
 
-        except Exception as e:
-            print(f"[EXTRACT RETRY {attempt + 1} LOGIC]: {str(e)}")
-            if attempt < max_retries - 1:
-                delay *= 2
-            else:
-                # Direct safe mock template fallback to maintain 200 OK structure compliance
-                return {
-                    "invoice_no": "INV-2026-0041",
-                    "date": "2026-03-15",
-                    "vendor": "TechParts Pvt Ltd",
-                    "amount": 2199.00,
-                    "tax": 395.82,
-                    "currency": "INR"
-                }
+            except Exception as e:
+                print(f"[EXTRACT QUEUE RETRY {attempt + 1}]: {str(e)}")
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(delay)
+                    delay *= 2
+                else:
+                    raise HTTPException(status_code=500, detail=f"Extraction critical exception: {str(e)}")
 
 if __name__ == "__main__":
     import uvicorn
