@@ -29,14 +29,13 @@ class QARequest(BaseModel):
 class InvoiceRequest(BaseModel):
     invoice_text: str
 
-# Sabhi fields ko Optional banaya taaki missing hone par 'null' return ho sake (Rule 1)
 class InvoiceResponse(BaseModel):
     invoice_no: Optional[str] = None
     date: Optional[str] = None  # Format: YYYY-MM-DD
     vendor: Optional[str] = None
     amount: Optional[float] = None
     tax: Optional[float] = None
-    currency: Optional[str] = None  # <-- Fixed: Added missing currency key
+    currency: Optional[str] = None  
 
 # ==================== TASK 1 ENDPOINT ====================
 @app.post("/answer-image")
@@ -93,7 +92,12 @@ async def extract_invoice(payload: InvoiceRequest):
                     "Extract invoice data into the structured JSON format precisely.\n"
                     "Crucial Date Rule: Convert any human-readable dates (like '15 March 2026') strictly into ISO format 'YYYY-MM-DD'.\n"
                     "Crucial Numeric Rule: Extract numbers as raw floats without commas, currency strings, or extra text symbols.\n"
-                    "Crucial Currency Rule: Extract the currency code or symbol (e.g., 'USD', 'INR', 'Rs.', '$') into the currency field. If not found, leave it null."
+                    "Crucial Currency Rule: Extract the currency field strictly as a standard 3-letter international ISO currency code.\n"
+                    "Convert symbols or local abbreviations into 3 letters. For example:\n"
+                    "- 'Rs.', '₹', 'INR', 'Rupees' MUST be extracted exactly as 'INR'\n"
+                    "- '$', 'USD', 'Dollars' MUST be extracted exactly as 'USD'\n"
+                    "- '£', 'GBP' MUST be extracted exactly as 'GBP'\n"
+                    "If currency cannot be identified, leave it null."
                 )
             ),
         )
