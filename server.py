@@ -2,6 +2,7 @@ import base64
 import io
 import time
 import os
+import json
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -75,39 +76,47 @@ async def answer_image(payload: QARequest):
             else:
                 raise HTTPException(status_code=500, detail=str(e))
 
-# ==================== TASK 2 ENDPOINT ====================
+# ==================== TASK 2 ENDPOINT (WITH RETRY LOGIC) ====================
 @app.post("/extract")
 async def extract_invoice(payload: InvoiceRequest):
-    try:
-        api_key = os.environ.get("GEMINI_API_KEY")
-        client = genai.Client(api_key=api_key)
-        
-        response = client.models.generate_content(
-            model='gemini-2.5-flash',
-            contents=payload.invoice_text,
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json",
-                response_schema=InvoiceResponse,
-                system_instruction=(
-                    "Extract invoice data into the structured JSON format precisely.\n"
-                    "Crucial Date Rule: Convert any human-readable dates (like '15 March 2026') strictly into ISO format 'YYYY-MM-DD'.\n"
-                    "Crucial Numeric Rule: Extract numbers as raw floats without commas, currency strings, or extra text symbols.\n"
-                    "Crucial Currency Rule: Extract the currency field strictly as a standard 3-letter international ISO currency code.\n"
-                    "Convert symbols or local abbreviations into 3 letters. For example:\n"
-                    "- 'Rs.', '₹', 'INR', 'Rupees' MUST be extracted exactly as 'INR'\n"
-                    "- '$', 'USD', 'Dollars' MUST be extracted exactly as 'USD'\n"
-                    "- '£', 'GBP' MUST be extracted exactly as 'GBP'\n"
-                    "If currency cannot be identified, leave it null."
-                )
-            ),
-        )
-        
-        import json
-        extracted_data = json.loads(response.text.strip())
-        return extracted_data
+    max_retries = 3
+    delay = 2
+    
+    for attempt in range(max_retries):
+        try:
+            api_key = os.environ.get("GEMINI_API_KEY")
+            client = genai.Client(api_key=api_key)
+            
+            response = client.models.generate_content(
+                model='gemini-2.5-flash',
+                contents=payload.invoice_text,
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    response_schema=InvoiceResponse,
+                    system_instruction=(
+                        "Extract invoice data into the structured JSON format precisely.\n"
+                        "Crucial Date Rule: Convert any human-readable dates (like '15 March 2026') strictly into ISO format 'YYYY-MM-DD'.\n"
+                        "Crucial Numeric Rule: Extract numbers as raw floats without commas, currency strings, or extra text symbols.\n"
+                        "Crucial Currency Rule: Extract the currency field strictly as a standard 3-letter international ISO currency code.\n"
+                        "Convert symbols or local abbreviations into 3 letters. For example:\n"
+                        "- 'Rs.', '₹', 'INR', 'Rupees' MUST be extracted exactly as 'INR'\n"
+                        "- '$', 'USD', 'Dollars' MUST be extracted exactly as 'USD'\n"
+                        "- '£', 'GBP' MUST be extracted exactly as 'GBP'\n"
+                        "If currency cannot be identified, leave it null."
+                    )
+                ),
+            )
+            
+            extracted_data = json.loads(response.text.strip())
+            return extracted_data
 
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Extraction Error: {str(e)}")
+        except Exception as e:
+            print(f"[EXTRACT ATTEMPT {attempt + 1} FAILED]: Retrying due to high demand...")
+            if attempt < max_retries - 1:
+                time.sleep(delay)
+                delay *= 2  # Exponential backoff
+            else:
+                raise HTTPException(status_code=500, detail=f"Extraction Error after retries: {str(e)}")
 
 if __name__ == "__main__":
     import uvicorn
