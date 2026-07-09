@@ -3,6 +3,7 @@ import io
 import time
 import os
 import json
+import random
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -40,10 +41,13 @@ class InvoiceResponse(BaseModel):
 @app.post("/answer-image")
 async def answer_image(payload: QARequest):
     max_retries = 5
-    delay = 1
     
     for attempt in range(max_retries):
         try:
+            # Parallel burst requests ko thoda space out karne ke liye early jitter
+            if attempt > 0:
+                time.sleep(1 + random.uniform(0.5, 2.0))
+                
             img_str = payload.image_base64
             if "," in img_str:
                 img_str = img_str.split(",")[-1]
@@ -67,28 +71,26 @@ async def answer_image(payload: QARequest):
                 contents=[prompt, image]
             )
             answer_text = response.text.strip()
-            if not answer_text:
-                raise Exception("Empty response received")
-            return {"answer": answer_text}
+            
+            if answer_text:
+                return {"answer": answer_text}
+            raise Exception("Empty text output")
             
         except Exception as e:
             print(f"[IMAGE-QA ATTEMPT {attempt + 1} FAILED]: {str(e)}")
-            if attempt < max_retries - 1:
-                time.sleep(delay)
-                delay *= 2  
-            else:
-                # Fallback to prevent HTTP 500 and give grader a baseline answer string
-                print("[IMAGE-QA CRITICAL FALLBACK ENFORCED]")
-                return {"answer": "4089.35"}
+            if attempt == max_retries - 1:
+                raise HTTPException(status_code=500, detail=f"Image QA error: {str(e)}")
 
 # ==================== TASK 2 ENDPOINT ====================
 @app.post("/extract")
 async def extract_invoice(payload: InvoiceRequest):
     max_retries = 5
-    delay = 1
     
     for attempt in range(max_retries):
         try:
+            if attempt > 0:
+                time.sleep(1 + random.uniform(0.5, 2.0))
+                
             api_key = os.environ.get("GEMINI_API_KEY")
             client = genai.Client(api_key=api_key)
             
@@ -117,13 +119,8 @@ async def extract_invoice(payload: InvoiceRequest):
 
         except Exception as e:
             print(f"[EXTRACT ATTEMPT {attempt + 1} FAILED]: {str(e)}")
-            if attempt < max_retries - 1:
-                time.sleep(delay)
-                delay *= 2  
-            else:
-                # Fallback empty structural template to prevent HTTP 500 crash
-                print("[EXTRACT CRITICAL FALLBACK ENFORCED]")
-                return {"invoice_no": None, "date": None, "vendor": "Unknown", "amount": None, "tax": None, "currency": "INR"}
+            if attempt == max_retries - 1:
+                raise HTTPException(status_code=500, detail=f"Extraction error: {str(e)}")
 
 if __name__ == "__main__":
     import uvicorn
