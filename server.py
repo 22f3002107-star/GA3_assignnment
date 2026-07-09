@@ -36,7 +36,6 @@ class InvoiceResponse(BaseModel):
     vendor: Optional[str] = None
     amount: Optional[float] = None
     tax: Optional[float] = None
-    total: Optional[float] = None
     currency: Optional[str] = None  # <-- Fixed: Added missing currency key
 
 # ==================== TASK 1 ENDPOINT ====================
