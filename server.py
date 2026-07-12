@@ -91,8 +91,8 @@ async def answer_image(payload: QARequest):
                         raise Exception("Empty response text in Invoice task")
                     
                     await asyncio.sleep(4.5)
-                    # GRADER COMPLIANCE: JSON structure ko string bana kar "answer" key ke andar bhej rahe hain
-                    return {"answer": response.text.strip()}
+                    # Force response format to strict single string dictionary wrapper object
+                    return {"answer": json.dumps(json.loads(response.text.strip()))}
 
                 # ---------------- TASK 3: TABULAR / CHART EXTRACTION ----------------
                 elif is_table_task:
@@ -113,8 +113,8 @@ async def answer_image(payload: QARequest):
                         raise Exception("Empty response text in Table task")
                     
                     await asyncio.sleep(4.5)
-                    # GRADER COMPLIANCE: JSON structure ko string bana kar "answer" key ke andar bhej rahe hain
-                    return {"answer": response.text.strip()}
+                    # Force response format to strict single string dictionary wrapper object
+                    return {"answer": json.dumps(json.loads(response.text.strip()))}
 
                 # ---------------- TASK 1: DIRECT RAW QA PROMPT ----------------
                 else:
