@@ -52,18 +52,20 @@ def decode_image_helper(base64_str: str) -> Image.Image:
     image_bytes = base64.b64decode(base64_str)
     return Image.open(io.BytesIO(image_bytes))
 
-# Clean List wrapper handler to fix ['text'] issues
+# Hyper-Intelligent Fallback Parser mapping dynamic numeric keywords smartly
 def smart_python_extract_fallback(text: str, schema: Dict[str, str]) -> Dict[str, Any]:
     output = {}
     lines = [line.strip() for line in text.split('\n') if line.strip()]
     
     for key, data_type in schema.items():
         key_lower = key.lower()
+        # Create generalized root words mapping for fields (e.g. author_count -> author)
+        root_key = key_lower.split('_')[0] if '_' in key_lower else key_lower
         val = None
         
         # Rule A: Strict structural label checking
         if data_type in ["integer", "float"]:
-            num_pattern = rf'\b{re.escape(key_lower)}\b(?:[\s\w_]*?)(?::|-|is|=)?\s*([\d.]+)'
+            num_pattern = rf'\b(?:{re.escape(key_lower)}|{re.escape(root_key)}[\w_]*?)\b(?:[\s\w_]*?)(?::|-|is|=)?\s*([\d.]+)'
             match = re.search(num_pattern, text, re.IGNORECASE)
             if match:
                 val = match.group(1)
@@ -81,10 +83,10 @@ def smart_python_extract_fallback(text: str, schema: Dict[str, str]) -> Dict[str
         if val is None and data_type == "string":
             quotes_match = re.findall(r"['\"](.*?)['\"]", text)
             if quotes_match:
-                val = quotes_match[0] # STRIKT FIX: Extract first element from list wrapper
+                val = quotes_match[0]
             elif lines:
                 if "title" in key_lower:
-                    val = lines[0] # Get raw first line instead of entire line array
+                    val = lines[0]
                 else:
                     for line in lines:
                         if key_lower in line.lower():
@@ -93,13 +95,8 @@ def smart_python_extract_fallback(text: str, schema: Dict[str, str]) -> Dict[str
 
         # Rule D: Final precise casting and sentence sanitization
         if val is not None:
-            # Safe layout converter for arrays to text conversion
-            if isinstance(val, list) and len(val) > 0:
-                val_str = str(val[0]).strip(" \t.,\"'")
-            else:
-                val_str = str(val).strip(" \t.,\"'")
-                
-            val_str = re.sub(r'^(published|title|paper|name|topic|conference|venue|journal|citations|pages|authors)\s*(?::|-|is|=)?\s*', '', val_str, flags=re.IGNORECASE)
+            val_str = str(val).strip(" \t.,\"'")
+            val_str = re.sub(r'^(published|title|paper|name|topic|conference|venue|journal|citations|pages|authors|author_count)\s*(?::|-|is|=)?\s*', '', val_str, flags=re.IGNORECASE)
             val_str = re.split(r'\.\s+(?=[A-Z])|\.\s+[A-Za-z\s]+:', val_str)[0]
             val_str = val_str.strip(" \t.,\"'")
             
@@ -117,10 +114,10 @@ def smart_python_extract_fallback(text: str, schema: Dict[str, str]) -> Dict[str
         else:
             if data_type == "integer":
                 nums = re.findall(r'\b\d+\b', text)
-                output[key] = int(nums[-1]) if nums else None  
+                output[key] = int(nums[0]) if nums else None  
             elif data_type == "float":
                 floats = re.findall(r'\b\d+\.\d+\b', text)
-                output[key] = float(floats[-1]) if floats else None
+                output[key] = float(floats[0]) if floats else None
             elif data_type == "date":
                 date_match = re.search(r'\b\d{4}-\d{2}-\d{2}\b', text)
                 output[key] = date_match.group(0) if date_match else None
