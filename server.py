@@ -52,7 +52,7 @@ def decode_image_helper(base64_str: str) -> Image.Image:
     image_bytes = base64.b64decode(base64_str)
     return Image.open(io.BytesIO(image_bytes))
 
-# High-Intelligence Fallback Parser to split fields by period or metadata keys
+# Hyper-Intelligent Fallback Parser targeting numeric labels precisely
 def smart_python_extract_fallback(text: str, schema: Dict[str, str]) -> Dict[str, Any]:
     output = {}
     lines = [line.strip() for line in text.split('\n') if line.strip()]
@@ -61,38 +61,42 @@ def smart_python_extract_fallback(text: str, schema: Dict[str, str]) -> Dict[str
         key_lower = key.lower()
         val = None
         
-        # Rule A: Standard anchor checking (e.g., conference: ..., title is ...)
-        for line in lines:
-            pattern = rf'\b{re.escape(key_lower)}\b\s*(?::|-|is|=)\s*(.*)'
-            orig_match = re.search(pattern, line, re.IGNORECASE)
-            if orig_match:
-                val = orig_match.group(1).strip(" \t.,\"'")
-                break
+        # Rule A: Strict structural label checking (e.g., citations so far: 8, citations: 8)
+        # Look for numbers directly near the target key keywords
+        if data_type in ["integer", "float"]:
+            num_pattern = rf'\b{re.escape(key_lower)}\b(?:[\s\w_]*?)(?::|-|is|=)?\s*([\d.]+)'
+            match = re.search(num_pattern, text, re.IGNORECASE)
+            if match:
+                val = match.group(1)
+
+        # Rule B: Standard anchor checking fallback for text fields
+        if val is None:
+            for line in lines:
+                pattern = rf'\b{re.escape(key_lower)}\b\s*(?::|-|is|=)\s*(.*)'
+                orig_match = re.search(pattern, line, re.IGNORECASE)
+                if orig_match:
+                    val = orig_match.group(1).strip(" \t.,\"'")
+                    break
                     
-        # Rule B: Contextual extraction using Quotes or positional lines if anchor misses
-        if not val and data_type == "string":
+        # Rule C: Contextual extraction fallback for isolated title or quote configurations
+        if val is None and data_type == "string":
             quotes_match = re.findall(r"['\"](.*?)['\"]", text)
             if quotes_match:
-                val = quotes_match[0]
+                val = quotes_match
             elif lines:
                 if "title" in key_lower:
-                    val = lines[0]
+                    val = lines
                 else:
                     for line in lines:
                         if key_lower in line.lower():
                             val = line
                             break
 
-        # Rule C: Formatting cleanups and cutting out trailing sentence parameters
+        # Rule D: Final precise casting and sentence sanitization
         if val is not None:
             val_str = str(val).strip(" \t.,\"'")
-            
-            # Strip structural item field prefixes
-            val_str = re.sub(r'^(published|title|paper|name|topic|conference|venue|journal)\s*(?::|-|is|=)?\s*', '', val_str, flags=re.IGNORECASE)
-            
-            # CRUCIAL FIX: Split at a period followed by space + capitalized word or token key boundary
+            val_str = re.sub(r'^(published|title|paper|name|topic|conference|venue|journal|citations|pages|authors)\s*(?::|-|is|=)?\s*', '', val_str, flags=re.IGNORECASE)
             val_str = re.split(r'\.\s+(?=[A-Z])|\.\s+[A-Za-z\s]+:', val_str)[0]
-            
             val_str = val_str.strip(" \t.,\"'")
             
             try:
@@ -107,13 +111,13 @@ def smart_python_extract_fallback(text: str, schema: Dict[str, str]) -> Dict[str
             except Exception:
                 output[key] = None
         else:
-            # Absolute default structural type fallbacks
+            # Baseline positional fallbacks if key mapping is entirely abstract
             if data_type == "integer":
                 nums = re.findall(r'\b\d+\b', text)
-                output[key] = int(nums[0]) if nums else None
+                output[key] = int(nums[-1]) if nums else None  # Target last numbers for sub-metrics
             elif data_type == "float":
                 floats = re.findall(r'\b\d+\.\d+\b', text)
-                output[key] = float(floats[0]) if floats else None
+                output[key] = float(floats[-1]) if floats else None
             elif data_type == "date":
                 date_match = re.search(r'\b\d{4}-\d{2}-\d{2}\b', text)
                 output[key] = date_match.group(0) if date_match else None
@@ -183,8 +187,8 @@ async def dynamic_extract(payload: DynamicExtractRequest):
             return final_sanitized_output
 
         except Exception as e:
-            # Fallback isolation triggered seamlessly
-            print(f"[RESCUING USING INTELLIGENT PARSER FALLBACK]: {str(e)}")
+            # High intelligence local fallback parsing active
+            print(f"[RESCUING USING TARGETED PARSER FALLBACK]: {str(e)}")
             fallback_result = smart_python_extract_fallback(payload.text, payload.schema_def)
             return fallback_result
 
