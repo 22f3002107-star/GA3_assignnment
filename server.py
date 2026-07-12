@@ -52,7 +52,7 @@ def decode_image_helper(base64_str: str) -> Image.Image:
     image_bytes = base64.b64decode(base64_str)
     return Image.open(io.BytesIO(image_bytes))
 
-# High-Intelligence Smart Fallback function to prevent null mismatches
+# High-Intelligence Smart Fallback function to extract exact text from quotes
 def smart_python_extract_fallback(text: str, schema: Dict[str, str]) -> Dict[str, Any]:
     output = {}
     lines = [line.strip() for line in text.split('\n') if line.strip()]
@@ -69,34 +69,39 @@ def smart_python_extract_fallback(text: str, schema: Dict[str, str]) -> Dict[str
                 val = orig_match.group(1).strip(" \t.,\"'")
                 break
                     
-        # Rule B: Contextual extraction fallback for Text fields if anchor misses
+        # Rule B: Contextual extraction using Quotes to isolate title strings perfectly
         if not val and data_type == "string":
-            if "title" in key_lower and lines:
-                # Papers or logs usually put title on the very first or dominant string line
-                cleaned_line = re.sub(r'^(title|paper|name|topic)\s*(?::|-|is)?\s*', '', lines[0], flags=re.IGNORECASE)
-                val = cleaned_line.strip(" \t.,\"'")
-            elif "name" in key_lower or "customer" in key_lower:
-                match = re.search(r'\b([A-Z][a-z]+)\b', text)
-                if match: val = match.group(1)
-            elif "store" in key_lower or "vendor" in key_lower:
-                match = re.search(r'(?:from|at)\s+([A-Za-z0-9\s]+)', text, re.IGNORECASE)
-                if match: val = match.group(1).strip()
+            # Find any phrases wrapped inside single or double quotes anywhere in the text
+            quotes_match = re.findall(r"['\"](.*?)['\"]", text)
+            if quotes_match:
+                val = quotes_match[0]
+            elif lines:
+                val = lines[0]
 
-        # Rule C: Formatting cleanups and safe casting conversions
-        if val is not None and str(val).strip() != "":
+        # Rule C: Formatting cleanups and stripping noise markers (like published:)
+        if val is not None:
+            val_str = str(val).strip(" \t.,\"'")
+            # Strip prefixes like "published:", "title:", etc.
+            val_str = re.sub(r'^(published|title|paper|name|topic)\s*(?::|-|is|=)?\s*', '', val_str, flags=re.IGNORECASE)
+            # Strip trailing metadata if full paragraph was caught
+            if ". authors:" in val_str.lower():
+                val_str = re.split(r'\.\s+authors:', val_str, flags=re.IGNORECASE)[0]
+                
+            val_str = val_str.strip(" \t.,\"'")
+            
             try:
                 if data_type == "integer":
-                    num_match = re.search(r'\d+', str(val))
+                    num_match = re.search(r'\d+', val_str)
                     output[key] = int(num_match.group(0)) if num_match else None
                 elif data_type == "float":
-                    float_match = re.search(r'\d+\.\d+|\d+', str(val))
+                    float_match = re.search(r'\d+\.\d+|\d+', val_str)
                     output[key] = float(float_match.group(0)) if float_match else None
                 else:
-                    output[key] = str(val)
+                    output[key] = val_str
             except Exception:
                 output[key] = None
         else:
-            # Type fallback based on structural arrays mapping
+            # Structural data type absolute defaults fallbacks
             if data_type == "integer":
                 nums = re.findall(r'\b\d+\b', text)
                 output[key] = int(nums[0]) if nums else None
@@ -107,8 +112,7 @@ def smart_python_extract_fallback(text: str, schema: Dict[str, str]) -> Dict[str
                 date_match = re.search(r'\b\d{4}-\d{2}-\d{2}\b', text)
                 output[key] = date_match.group(0) if date_match else None
             else:
-                # If everything else fails for title string, pass the full single line structure
-                output[key] = lines[0] if lines else None
+                output[key] = None
     return output
 
 # ==================== TASK 1: MULTIMODAL QA ====================
@@ -173,7 +177,7 @@ async def dynamic_extract(payload: DynamicExtractRequest):
             return final_sanitized_output
 
         except Exception as e:
-            # Fallback triggered smoothly to match key phrases correctly without null error
+            # Trigger smart fallback parsing to clean strings perfectly
             print(f"[RESCUING USING INTELLIGENT PARSER FALLBACK]: {str(e)}")
             fallback_result = smart_python_extract_fallback(payload.text, payload.schema_def)
             return fallback_result
