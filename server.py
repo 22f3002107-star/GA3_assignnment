@@ -26,9 +26,9 @@ if not API_KEY:
     raise RuntimeError("GEMINI_API_KEY environment variable is missing!")
 client = genai.Client(api_key=API_KEY)
 
+# Strict Lock to prevent local concurrency overlap
 RATE_LIMIT_LOCK = asyncio.Lock()
 
-# ==================== DATA SCHEMAS ====================
 class QARequest(BaseModel):
     image_base64: str
     question: str
@@ -57,8 +57,8 @@ def decode_image_helper(base64_str: str) -> Image.Image:
 @app.post("/answer-image")
 async def answer_image(payload: QARequest):
     async with RATE_LIMIT_LOCK:
-        max_retries = 4
-        delay = 2
+        max_retries = 5
+        delay = 4.0  # Increased baseline delay
         
         for attempt in range(max_retries):
             try:
@@ -79,13 +79,16 @@ async def answer_image(payload: QARequest):
                 if not response.text:
                     raise Exception("Empty response from Gemini API")
                 
-                await asyncio.sleep(4.5)
+                # Dynamic mandatory spacing per request
+                await asyncio.sleep(5.0)
                 return {"answer": response.text.strip()}
 
             except Exception as e:
                 print(f"[QA RETRY {attempt + 1}]: {str(e)}")
                 if attempt < max_retries - 1:
-                    await asyncio.sleep(delay)
+                    # Adaptive safety backup sleep for heavy API blocks
+                    sleep_time = delay if "RESOURCE_EXHAUSTED" not in str(e) else 15.0
+                    await asyncio.sleep(sleep_time)
                     delay *= 2
                 else:
                     raise HTTPException(status_code=500, detail=f"Processing exception: {str(e)}")
@@ -94,8 +97,8 @@ async def answer_image(payload: QARequest):
 @app.post("/extract")
 async def extract_invoice(payload: InvoiceRequest):
     async with RATE_LIMIT_LOCK:
-        max_retries = 4
-        delay = 2
+        max_retries = 6  # Higher attempts to counter bulk tests
+        delay = 5.0
         
         for attempt in range(max_retries):
             try:
@@ -121,14 +124,16 @@ async def extract_invoice(payload: InvoiceRequest):
                     raise Exception("Empty text string returned during structural extraction")
                     
                 extracted_data = json.loads(response.text.strip())
-                await asyncio.sleep(4.5)
+                await asyncio.sleep(5.0)
                 return extracted_data
 
             except Exception as e:
                 print(f"[EXTRACT RETRY {attempt + 1}]: {str(e)}")
                 if attempt < max_retries - 1:
-                    await asyncio.sleep(delay)
-                    delay *= 2
+                    # If 429 occurs, execute a broad back-off to clear the Gemini minute quota
+                    sleep_time = 25.0 if "RESOURCE_EXHAUSTED" in str(e) else delay
+                    await asyncio.sleep(sleep_time)
+                    delay *= 1.5
                 else:
                     raise HTTPException(status_code=500, detail=f"Extraction critical exception: {str(e)}")
 
