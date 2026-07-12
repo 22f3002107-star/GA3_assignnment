@@ -52,7 +52,7 @@ def decode_image_helper(base64_str: str) -> Image.Image:
     image_bytes = base64.b64decode(base64_str)
     return Image.open(io.BytesIO(image_bytes))
 
-# Hyper-Intelligent Fallback Parser targeting numeric labels precisely
+# Clean List wrapper handler to fix ['text'] issues
 def smart_python_extract_fallback(text: str, schema: Dict[str, str]) -> Dict[str, Any]:
     output = {}
     lines = [line.strip() for line in text.split('\n') if line.strip()]
@@ -61,8 +61,7 @@ def smart_python_extract_fallback(text: str, schema: Dict[str, str]) -> Dict[str
         key_lower = key.lower()
         val = None
         
-        # Rule A: Strict structural label checking (e.g., citations so far: 8, citations: 8)
-        # Look for numbers directly near the target key keywords
+        # Rule A: Strict structural label checking
         if data_type in ["integer", "float"]:
             num_pattern = rf'\b{re.escape(key_lower)}\b(?:[\s\w_]*?)(?::|-|is|=)?\s*([\d.]+)'
             match = re.search(num_pattern, text, re.IGNORECASE)
@@ -82,10 +81,10 @@ def smart_python_extract_fallback(text: str, schema: Dict[str, str]) -> Dict[str
         if val is None and data_type == "string":
             quotes_match = re.findall(r"['\"](.*?)['\"]", text)
             if quotes_match:
-                val = quotes_match
+                val = quotes_match[0] # STRIKT FIX: Extract first element from list wrapper
             elif lines:
                 if "title" in key_lower:
-                    val = lines
+                    val = lines[0] # Get raw first line instead of entire line array
                 else:
                     for line in lines:
                         if key_lower in line.lower():
@@ -94,7 +93,12 @@ def smart_python_extract_fallback(text: str, schema: Dict[str, str]) -> Dict[str
 
         # Rule D: Final precise casting and sentence sanitization
         if val is not None:
-            val_str = str(val).strip(" \t.,\"'")
+            # Safe layout converter for arrays to text conversion
+            if isinstance(val, list) and len(val) > 0:
+                val_str = str(val[0]).strip(" \t.,\"'")
+            else:
+                val_str = str(val).strip(" \t.,\"'")
+                
             val_str = re.sub(r'^(published|title|paper|name|topic|conference|venue|journal|citations|pages|authors)\s*(?::|-|is|=)?\s*', '', val_str, flags=re.IGNORECASE)
             val_str = re.split(r'\.\s+(?=[A-Z])|\.\s+[A-Za-z\s]+:', val_str)[0]
             val_str = val_str.strip(" \t.,\"'")
@@ -111,10 +115,9 @@ def smart_python_extract_fallback(text: str, schema: Dict[str, str]) -> Dict[str
             except Exception:
                 output[key] = None
         else:
-            # Baseline positional fallbacks if key mapping is entirely abstract
             if data_type == "integer":
                 nums = re.findall(r'\b\d+\b', text)
-                output[key] = int(nums[-1]) if nums else None  # Target last numbers for sub-metrics
+                output[key] = int(nums[-1]) if nums else None  
             elif data_type == "float":
                 floats = re.findall(r'\b\d+\.\d+\b', text)
                 output[key] = float(floats[-1]) if floats else None
@@ -187,7 +190,6 @@ async def dynamic_extract(payload: DynamicExtractRequest):
             return final_sanitized_output
 
         except Exception as e:
-            # High intelligence local fallback parsing active
             print(f"[RESCUING USING TARGETED PARSER FALLBACK]: {str(e)}")
             fallback_result = smart_python_extract_fallback(payload.text, payload.schema_def)
             return fallback_result
