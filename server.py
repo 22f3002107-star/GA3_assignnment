@@ -8,6 +8,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from google import genai
+from google.genai import types  
 from PIL import Image
 
 app = FastAPI()
@@ -84,11 +85,10 @@ async def extract_invoice(payload: InvoiceRequest):
         max_retries = 4
         for attempt in range(max_retries):
             try:
-                # Prompt formatting forcing standard raw JSON structure output explicitly
                 structured_prompt = (
                     f"Text payload:\n{payload.invoice_text}\n\n"
                     "Task: Extract corporate invoice metrics strictly matching the properties key details listed down below.\n"
-                    "Your response format MUST be a pure minified JSON dictionary string containing exactly these 6 keys. If a value cannot be found, populate it as null.\n\n"
+                    "Your response format MUST be a pure valid minified JSON dictionary string containing exactly these 6 keys. If a value cannot be found, populate it as null.\n\n"
                     "Expected Keys JSON Structure Guideline:\n"
                     "{\n"
                     "  \"invoice_no\": \"String token value or null\",\n"
@@ -101,17 +101,20 @@ async def extract_invoice(payload: InvoiceRequest):
                     "Important Parsing Rule: For 'amount', use the raw subtotal before tax. Clean all values from local signs, extra letters, or commas."
                 )
 
+                # Strict application/json mime type configuration setup without Pydantic schema bug
                 response = client.models.generate_content(
                     model='gemini-2.5-flash',
-                    contents=structured_prompt
+                    contents=structured_prompt,
+                    config=types.GenerateContentConfig(
+                        response_mime_type="application/json"
+                    )
                 )
                 
                 if not response.text:
-                    raise Exception("Blank textual payload response detected from Gemini service")
+                    raise Exception("Blank textual payload response detected from Gemini")
                 
                 raw_text = response.text.strip()
                 
-                # Removing potential markdown wrappers safely
                 if "```" in raw_text:
                     raw_text = re.sub(r"^```(?:json)?\s*", "", raw_text)
                     raw_text = re.sub(r"\s*```$", "", raw_text)
@@ -125,7 +128,7 @@ async def extract_invoice(payload: InvoiceRequest):
                     sleep_time = 15.0 if "RESOURCE_EXHAUSTED" in str(e) else 2.0
                     await asyncio.sleep(sleep_time)
                 else:
-                    raise HTTPException(status_code=500, detail=f"Extraction failure wrapper: {str(e)}")
+                    raise HTTPException(status_code=500, detail=f"Extraction failure: {str(e)}")
 
 if __name__ == "__main__":
     import uvicorn
