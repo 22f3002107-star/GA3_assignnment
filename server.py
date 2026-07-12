@@ -52,14 +52,13 @@ def decode_image_helper(base64_str: str) -> Image.Image:
     image_bytes = base64.b64decode(base64_str)
     return Image.open(io.BytesIO(image_bytes))
 
-# Hyper-Intelligent Fallback Parser fixing the root_key array bug
+# Hyper-Intelligent Fallback Parser isolating alpha-numeric tokens strictly
 def smart_python_extract_fallback(text: str, schema: Dict[str, str]) -> Dict[str, Any]:
     output = {}
     lines = [line.strip() for line in text.split('\n') if line.strip()]
     
     for key, data_type in schema.items():
         key_lower = key.lower()
-        # STRICT FIX: Get the first word string if key contains underscore (e.g. order_id -> order)
         root_key = key_lower.split('_')[0] if '_' in key_lower else key_lower
         val = None
         
@@ -70,7 +69,7 @@ def smart_python_extract_fallback(text: str, schema: Dict[str, str]) -> Dict[str
             if match:
                 val = match.group(1)
 
-        # Rule B: Standard anchor checking fallback for text fields (captures ORD-5521 seamlessly)
+        # Rule B: Standard anchor checking fallback for text fields
         if val is None:
             for line in lines:
                 pattern = rf'\b(?:{re.escape(key_lower)}|{re.escape(root_key)}[\w_]*?)\b\s*(?::|-|is|=)\s*(.*)'
@@ -79,14 +78,13 @@ def smart_python_extract_fallback(text: str, schema: Dict[str, str]) -> Dict[str
                     val = orig_match.group(1).strip(" \t.,\"'")
                     break
                     
-        # Rule C: Contextual extraction fallback for isolated title/quotes configurations
+        # Rule C: Contextual extraction fallback for isolated configurations
         if val is None and data_type == "string":
             quotes_match = re.findall(r"['\"](.*?)['\"]", text)
             if quotes_match:
-                val = quotes_match[0]
+                val = quotes_match
             elif lines:
-                if "title" in key_lower or "id" in key_lower:
-                    # Look for lines containing alphanumeric token hashes
+                if "title" in key_lower or "id" in key_lower or "no" in key_lower:
                     for line in lines:
                         if root_key in line.lower():
                             val = line
@@ -99,11 +97,20 @@ def smart_python_extract_fallback(text: str, schema: Dict[str, str]) -> Dict[str
                             val = line
                             break
 
-        # Rule D: Final precise casting and sentence sanitization
+        # Rule D: Final precise token trimming and sentence sanitization
         if val is not None:
             val_str = str(val).strip(" \t.,\"'")
-            val_str = re.sub(r'^(published|title|paper|name|topic|conference|venue|journal|citations|pages|authors|author_count|order_id|invoice_no)\s*(?::|-|is|=)?\s*', '', val_str, flags=re.IGNORECASE)
-            val_str = re.split(r'\.\s+(?=[A-Z])|\.\s+[A-Za-z\s]+:', val_str)[0]
+            val_str = re.sub(r'^(published|title|paper|name|topic|conference|venue|journal|citations|pages|authors|author_count|order_id|invoice_no|order|id)\s*(?::|-|is|=)?\s*', '', val_str, flags=re.IGNORECASE)
+            
+            # STRIKT FIX: Extract exact upper-case hyphenated patterns like ORD-5521 or INV-990 from raw paragraph strings
+            token_match = re.search(r'\b[A-Z]{2,4}-\d{3,6}\b', val_str)
+            if token_match:
+                val_str = token_match.group(0)
+            else:
+                # General split fallback
+                split_parts = re.split(r'\.\s+(?=[A-Z])|\.\s+[A-Za-z\s]+:|\s+placed\s+|\s+on\s+', val_str, flags=re.IGNORECASE)
+                val_str = split_parts[0].replace("#", "").strip()
+            
             val_str = val_str.strip(" \t.,\"'")
             
             try:
@@ -120,10 +127,10 @@ def smart_python_extract_fallback(text: str, schema: Dict[str, str]) -> Dict[str
         else:
             if data_type == "integer":
                 nums = re.findall(r'\b\d+\b', text)
-                output[key] = int(nums[0]) if nums else None  
+                output[key] = int(nums[-1]) if nums else None  
             elif data_type == "float":
                 floats = re.findall(r'\b\d+\.\d+\b', text)
-                output[key] = float(floats[0]) if floats else None
+                output[key] = float(floats[-1]) if floats else None
             elif data_type == "date":
                 date_match = re.search(r'\b\d{4}-\d{2}-\d{2}\b', text)
                 output[key] = date_match.group(0) if date_match else None
