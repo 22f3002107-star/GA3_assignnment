@@ -13,7 +13,6 @@ from typing import Optional, List
 
 app = FastAPI()
 
-# Enable CORS for all incoming grader or frontend endpoints
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -22,21 +21,17 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Global Client setup for API key re-use
 API_KEY = os.environ.get("GEMINI_API_KEY")
 if not API_KEY:
     raise RuntimeError("GEMINI_API_KEY environment variable is missing!")
 client = genai.Client(api_key=API_KEY)
 
-# Strict Google API Rate Limit Block Layer (Ensures 1 request at a time)
 RATE_LIMIT_LOCK = asyncio.Lock()
 
-# ==================== DATA SCHEMAS ====================
 class QARequest(BaseModel):
     image_base64: str
     question: str
 
-# Task 2 Schema (Invoice Details Extraction)
 class InvoiceResponse(BaseModel):
     invoice_no: Optional[str] = None
     date: Optional[str] = None  
@@ -45,7 +40,6 @@ class InvoiceResponse(BaseModel):
     tax: Optional[float] = None
     currency: Optional[str] = None  
 
-# Task 3 Schemas (Table/Pie Chart Data Extraction)
 class RowItem(BaseModel):
     label: str               
     value: float             
@@ -54,9 +48,7 @@ class TableExtractionResponse(BaseModel):
     title: Optional[str] = None
     data_points: List[RowItem]
 
-# ==================== UTILITY FUNCTION ====================
 def decode_image_helper(base64_str: str) -> Image.Image:
-    """Safely decodes base64 payload and resolves potential padding mismatches."""
     if "," in base64_str:
         base64_str = base64_str.split(",")[-1]
     missing_padding = len(base64_str) % 4
@@ -65,17 +57,13 @@ def decode_image_helper(base64_str: str) -> Image.Image:
     image_bytes = base64.b64decode(base64_str)
     return Image.open(io.BytesIO(image_bytes))
 
-# ==================== SINGLE CONSOLIDATED ENDPOINT ====================
 @app.post("/answer-image")
 async def answer_image(payload: QARequest):
     async with RATE_LIMIT_LOCK:
         max_retries = 4
         delay = 2
         
-        # User ke question se target task determine karna
         question_lower = payload.question.lower()
-        
-        # Scenario Classification logic
         is_invoice_task = "invoice" in question_lower or "bill" in question_lower or "vendor" in question_lower
         is_table_task = "table" in question_lower or "chart" in question_lower or "pie" in question_lower or "bar" in question_lower or "data point" in question_lower
 
@@ -102,9 +90,9 @@ async def answer_image(payload: QARequest):
                     if not response.text:
                         raise Exception("Empty response text in Invoice task")
                     
-                    extracted_data = json.loads(response.text.strip())
-                    await asyncio.sleep(4.5)  # Safe cooldown buffer
-                    return extracted_data
+                    await asyncio.sleep(4.5)
+                    # GRADER COMPLIANCE: JSON structure ko string bana kar "answer" key ke andar bhej rahe hain
+                    return {"answer": response.text.strip()}
 
                 # ---------------- TASK 3: TABULAR / CHART EXTRACTION ----------------
                 elif is_table_task:
@@ -124,9 +112,9 @@ async def answer_image(payload: QARequest):
                     if not response.text:
                         raise Exception("Empty response text in Table task")
                     
-                    extracted_table = json.loads(response.text.strip())
-                    await asyncio.sleep(4.5)  # Safe cooldown buffer
-                    return extracted_table
+                    await asyncio.sleep(4.5)
+                    # GRADER COMPLIANCE: JSON structure ko string bana kar "answer" key ke andar bhej rahe hain
+                    return {"answer": response.text.strip()}
 
                 # ---------------- TASK 1: DIRECT RAW QA PROMPT ----------------
                 else:
@@ -143,9 +131,8 @@ async def answer_image(payload: QARequest):
                     if not response.text:
                         raise Exception("Empty response text in direct QA task")
                         
-                    answer_text = response.text.strip()
-                    await asyncio.sleep(4.5)  # Safe cooldown buffer
-                    return {"answer": answer_text}
+                    await asyncio.sleep(4.5)
+                    return {"answer": response.text.strip()}
 
             except Exception as e:
                 print(f"[API ROUTER QUEUE RETRY {attempt + 1}]: {str(e)}")
