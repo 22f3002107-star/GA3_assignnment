@@ -8,9 +8,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from google import genai
-from google.genai import types  
 from PIL import Image
-from typing import Optional
 
 app = FastAPI()
 
@@ -35,14 +33,6 @@ class QARequest(BaseModel):
 
 class InvoiceRequest(BaseModel):
     invoice_text: str
-
-class InvoiceResponse(BaseModel):
-    invoice_no: Optional[str] = None
-    date: Optional[str] = None  
-    vendor: Optional[str] = None
-    amount: Optional[float] = None
-    tax: Optional[float] = None
-    currency: Optional[str] = None  
 
 def decode_image_helper(base64_str: str) -> Image.Image:
     if "," in base64_str:
@@ -82,7 +72,6 @@ async def answer_image(payload: QARequest):
             except Exception as e:
                 print(f"[QA RETRY {attempt + 1}]: {str(e)}")
                 if attempt < max_retries - 1:
-                    # Agar rate limit aati hai toh Google ke mutabik thoda lamba break lenge
                     sleep_time = 15.0 if "RESOURCE_EXHAUSTED" in str(e) else 2.0
                     await asyncio.sleep(sleep_time)
                 else:
@@ -95,29 +84,35 @@ async def extract_invoice(payload: InvoiceRequest):
         max_retries = 4
         for attempt in range(max_retries):
             try:
+                # Prompt formatting forcing standard raw JSON structure output explicitly
+                structured_prompt = (
+                    f"Text payload:\n{payload.invoice_text}\n\n"
+                    "Task: Extract corporate invoice metrics strictly matching the properties key details listed down below.\n"
+                    "Your response format MUST be a pure minified JSON dictionary string containing exactly these 6 keys. If a value cannot be found, populate it as null.\n\n"
+                    "Expected Keys JSON Structure Guideline:\n"
+                    "{\n"
+                    "  \"invoice_no\": \"String token value or null\",\n"
+                    "  \"date\": \"Strict ISO string format 'YYYY-MM-DD' only, or null\",\n"
+                    "  \"vendor\": \"String organization name or null\",\n"
+                    "  \"amount\": Raw subtotal float value BEFORE tax only, or null,\n"
+                    "  \"tax\": Raw float tax amount value only, or null,\n"
+                    "  \"currency\": \"Strict 3-letter international ISO currency code string (e.g., 'INR', 'USD', 'GBP'), or null\"\n"
+                    "}\n\n"
+                    "Important Parsing Rule: For 'amount', use the raw subtotal before tax. Clean all values from local signs, extra letters, or commas."
+                )
+
                 response = client.models.generate_content(
                     model='gemini-2.5-flash',
-                    contents=payload.invoice_text,
-                    config=types.GenerateContentConfig(
-                        response_mime_type="application/json",
-                        response_schema=InvoiceResponse,
-                        system_instruction=(
-                            "Extract invoice data into the structured JSON format precisely.\n"
-                            "You MUST always populate all 6 fields. Use null if a field cannot be found.\n"
-                            "Crucial Date Rule: Convert any human-readable dates (like '15 March 2026') strictly into ISO format 'YYYY-MM-DD'.\n"
-                            "Crucial Amount Rule: The 'amount' field MUST be strictly the subtotal BEFORE tax (excluding tax). Do NOT extract the Grand Total or Total After Tax into the 'amount' field.\n"
-                            "Crucial Tax Rule: The 'tax' field must be the tax amount only.\n"
-                            "Crucial Numeric Rule: Extract numbers as raw floats without commas, currency strings, or extra text symbols.\n"
-                            "Crucial Currency Rule: Extract the currency field strictly as a standard 3-letter international ISO currency code (e.g., 'INR', 'USD', 'GBP')."
-                        )
-                    ),
+                    contents=structured_prompt
                 )
                 
                 if not response.text:
-                    raise Exception("Empty text string returned during structural extraction")
+                    raise Exception("Blank textual payload response detected from Gemini service")
                 
                 raw_text = response.text.strip()
-                if raw_text.startswith("```"):
+                
+                # Removing potential markdown wrappers safely
+                if "```" in raw_text:
                     raw_text = re.sub(r"^```(?:json)?\s*", "", raw_text)
                     raw_text = re.sub(r"\s*```$", "", raw_text)
                 
@@ -127,11 +122,10 @@ async def extract_invoice(payload: InvoiceRequest):
             except Exception as e:
                 print(f"[EXTRACT RETRY {attempt + 1}]: {str(e)}")
                 if attempt < max_retries - 1:
-                    # Dynamic backoff to respect free tier boundaries cleanly
-                    sleep_time = 12.0 if "RESOURCE_EXHAUSTED" in str(e) else 2.0
+                    sleep_time = 15.0 if "RESOURCE_EXHAUSTED" in str(e) else 2.0
                     await asyncio.sleep(sleep_time)
                 else:
-                    raise HTTPException(status_code=500, detail=f"Extraction error: {str(e)}")
+                    raise HTTPException(status_code=500, detail=f"Extraction failure wrapper: {str(e)}")
 
 if __name__ == "__main__":
     import uvicorn
