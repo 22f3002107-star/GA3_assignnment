@@ -36,7 +36,6 @@ class QARequest(BaseModel):
 class InvoiceRequest(BaseModel):
     invoice_text: str
 
-# STRIKT COMPLIANCE: Added currency to ensure all 6 keys are always present
 class InvoiceResponse(BaseModel):
     invoice_no: Optional[str] = None
     date: Optional[str] = None  
@@ -110,6 +109,8 @@ async def extract_invoice(payload: InvoiceRequest):
                             "Extract invoice data into the structured JSON format precisely.\n"
                             "You MUST always populate all 6 fields. Use null if a field cannot be found.\n"
                             "Crucial Date Rule: Convert any human-readable dates (like '15 March 2026') strictly into ISO format 'YYYY-MM-DD'.\n"
+                            "Crucial Amount Rule: The 'amount' field MUST be strictly the subtotal BEFORE tax (excluding tax). Do NOT extract the Grand Total or Total After Tax into the 'amount' field.\n"
+                            "Crucial Tax Rule: The 'tax' field must be the tax amount only.\n"
                             "Crucial Numeric Rule: Extract numbers as raw floats without commas, currency strings, or extra text symbols.\n"
                             "Crucial Currency Rule: Extract the currency field strictly as a standard 3-letter international ISO currency code (e.g., 'INR', 'USD', 'GBP')."
                         )
