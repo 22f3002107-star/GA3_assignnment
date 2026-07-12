@@ -58,8 +58,6 @@ def decode_image_helper(base64_str: str) -> Image.Image:
 async def answer_image(payload: QARequest):
     async with RATE_LIMIT_LOCK:
         max_retries = 4
-        delay = 1.5
-        
         for attempt in range(max_retries):
             try:
                 image = decode_image_helper(payload.image_base64)
@@ -79,14 +77,14 @@ async def answer_image(payload: QARequest):
                 if not response.text:
                     raise Exception("Empty response from Gemini API")
                 
-                await asyncio.sleep(1.0)
                 return {"answer": response.text.strip()}
 
             except Exception as e:
                 print(f"[QA RETRY {attempt + 1}]: {str(e)}")
                 if attempt < max_retries - 1:
-                    await asyncio.sleep(delay)
-                    delay *= 1.5
+                    # Agar rate limit aati hai toh Google ke mutabik thoda lamba break lenge
+                    sleep_time = 15.0 if "RESOURCE_EXHAUSTED" in str(e) else 2.0
+                    await asyncio.sleep(sleep_time)
                 else:
                     raise HTTPException(status_code=500, detail=f"Processing exception: {str(e)}")
 
@@ -95,8 +93,6 @@ async def answer_image(payload: QARequest):
 async def extract_invoice(payload: InvoiceRequest):
     async with RATE_LIMIT_LOCK:
         max_retries = 4
-        delay = 1.5
-        
         for attempt in range(max_retries):
             try:
                 response = client.models.generate_content(
@@ -121,21 +117,19 @@ async def extract_invoice(payload: InvoiceRequest):
                     raise Exception("Empty text string returned during structural extraction")
                 
                 raw_text = response.text.strip()
-                
-                # Robust Markdown/Clean parsing to prevent JSON decode errors
                 if raw_text.startswith("```"):
                     raw_text = re.sub(r"^```(?:json)?\s*", "", raw_text)
                     raw_text = re.sub(r"\s*```$", "", raw_text)
                 
                 extracted_data = json.loads(raw_text.strip())
-                await asyncio.sleep(1.0)
                 return extracted_data
 
             except Exception as e:
                 print(f"[EXTRACT RETRY {attempt + 1}]: {str(e)}")
                 if attempt < max_retries - 1:
-                    await asyncio.sleep(delay)
-                    delay *= 2.0
+                    # Dynamic backoff to respect free tier boundaries cleanly
+                    sleep_time = 12.0 if "RESOURCE_EXHAUSTED" in str(e) else 2.0
+                    await asyncio.sleep(sleep_time)
                 else:
                     raise HTTPException(status_code=500, detail=f"Extraction error: {str(e)}")
 
