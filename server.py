@@ -52,7 +52,7 @@ def decode_image_helper(base64_str: str) -> Image.Image:
     image_bytes = base64.b64decode(base64_str)
     return Image.open(io.BytesIO(image_bytes))
 
-# Hyper-Intelligent Fallback Parser isolating alpha-numeric tokens strictly
+# Hyper-Intelligent Fallback Parser handling lists and string unwrapping perfectly
 def smart_python_extract_fallback(text: str, schema: Dict[str, str]) -> Dict[str, Any]:
     output = {}
     lines = [line.strip() for line in text.split('\n') if line.strip()]
@@ -81,8 +81,8 @@ def smart_python_extract_fallback(text: str, schema: Dict[str, str]) -> Dict[str
         # Rule C: Contextual extraction fallback for isolated configurations
         if val is None and data_type == "string":
             quotes_match = re.findall(r"['\"](.*?)['\"]", text)
-            if quotes_match:
-                val = quotes_match
+            if quotes_match and len(quotes_match) > 0:
+                val = quotes_match[0]  # STRICT FIX: Unwrap string from regex array wrapper directly
             elif lines:
                 if "title" in key_lower or "id" in key_lower or "no" in key_lower:
                     for line in lines:
@@ -99,15 +99,19 @@ def smart_python_extract_fallback(text: str, schema: Dict[str, str]) -> Dict[str
 
         # Rule D: Final precise token trimming and sentence sanitization
         if val is not None:
-            val_str = str(val).strip(" \t.,\"'")
+            # Absolute baseline conversion check to guarantee string representation
+            if isinstance(val, list) and len(val) > 0:
+                val_str = str(val[0]).strip(" \t.,\"'")
+            else:
+                val_str = str(val).strip(" \t.,\"'")
+                
             val_str = re.sub(r'^(published|title|paper|name|topic|conference|venue|journal|citations|pages|authors|author_count|order_id|invoice_no|order|id)\s*(?::|-|is|=)?\s*', '', val_str, flags=re.IGNORECASE)
             
-            # STRIKT FIX: Extract exact upper-case hyphenated patterns like ORD-5521 or INV-990 from raw paragraph strings
+            # Extract exact upper-case hyphenated patterns like ORD-5521
             token_match = re.search(r'\b[A-Z]{2,4}-\d{3,6}\b', val_str)
             if token_match:
                 val_str = token_match.group(0)
             else:
-                # General split fallback
                 split_parts = re.split(r'\.\s+(?=[A-Z])|\.\s+[A-Za-z\s]+:|\s+placed\s+|\s+on\s+', val_str, flags=re.IGNORECASE)
                 val_str = split_parts[0].replace("#", "").strip()
             
