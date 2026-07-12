@@ -52,7 +52,7 @@ def decode_image_helper(base64_str: str) -> Image.Image:
     image_bytes = base64.b64decode(base64_str)
     return Image.open(io.BytesIO(image_bytes))
 
-# High-Intelligence Smart Fallback function to extract exact text from quotes
+# High-Intelligence Fallback Parser to split fields by period or metadata keys
 def smart_python_extract_fallback(text: str, schema: Dict[str, str]) -> Dict[str, Any]:
     output = {}
     lines = [line.strip() for line in text.split('\n') if line.strip()]
@@ -61,7 +61,7 @@ def smart_python_extract_fallback(text: str, schema: Dict[str, str]) -> Dict[str
         key_lower = key.lower()
         val = None
         
-        # Rule A: Standard anchor checking (e.g., title: ..., title is ...)
+        # Rule A: Standard anchor checking (e.g., conference: ..., title is ...)
         for line in lines:
             pattern = rf'\b{re.escape(key_lower)}\b\s*(?::|-|is|=)\s*(.*)'
             orig_match = re.search(pattern, line, re.IGNORECASE)
@@ -69,24 +69,30 @@ def smart_python_extract_fallback(text: str, schema: Dict[str, str]) -> Dict[str
                 val = orig_match.group(1).strip(" \t.,\"'")
                 break
                     
-        # Rule B: Contextual extraction using Quotes to isolate title strings perfectly
+        # Rule B: Contextual extraction using Quotes or positional lines if anchor misses
         if not val and data_type == "string":
-            # Find any phrases wrapped inside single or double quotes anywhere in the text
             quotes_match = re.findall(r"['\"](.*?)['\"]", text)
             if quotes_match:
                 val = quotes_match[0]
             elif lines:
-                val = lines[0]
+                if "title" in key_lower:
+                    val = lines[0]
+                else:
+                    for line in lines:
+                        if key_lower in line.lower():
+                            val = line
+                            break
 
-        # Rule C: Formatting cleanups and stripping noise markers (like published:)
+        # Rule C: Formatting cleanups and cutting out trailing sentence parameters
         if val is not None:
             val_str = str(val).strip(" \t.,\"'")
-            # Strip prefixes like "published:", "title:", etc.
-            val_str = re.sub(r'^(published|title|paper|name|topic)\s*(?::|-|is|=)?\s*', '', val_str, flags=re.IGNORECASE)
-            # Strip trailing metadata if full paragraph was caught
-            if ". authors:" in val_str.lower():
-                val_str = re.split(r'\.\s+authors:', val_str, flags=re.IGNORECASE)[0]
-                
+            
+            # Strip structural item field prefixes
+            val_str = re.sub(r'^(published|title|paper|name|topic|conference|venue|journal)\s*(?::|-|is|=)?\s*', '', val_str, flags=re.IGNORECASE)
+            
+            # CRUCIAL FIX: Split at a period followed by space + capitalized word or token key boundary
+            val_str = re.split(r'\.\s+(?=[A-Z])|\.\s+[A-Za-z\s]+:', val_str)[0]
+            
             val_str = val_str.strip(" \t.,\"'")
             
             try:
@@ -101,7 +107,7 @@ def smart_python_extract_fallback(text: str, schema: Dict[str, str]) -> Dict[str
             except Exception:
                 output[key] = None
         else:
-            # Structural data type absolute defaults fallbacks
+            # Absolute default structural type fallbacks
             if data_type == "integer":
                 nums = re.findall(r'\b\d+\b', text)
                 output[key] = int(nums[0]) if nums else None
@@ -177,7 +183,7 @@ async def dynamic_extract(payload: DynamicExtractRequest):
             return final_sanitized_output
 
         except Exception as e:
-            # Trigger smart fallback parsing to clean strings perfectly
+            # Fallback isolation triggered seamlessly
             print(f"[RESCUING USING INTELLIGENT PARSER FALLBACK]: {str(e)}")
             fallback_result = smart_python_extract_fallback(payload.text, payload.schema_def)
             return fallback_result
